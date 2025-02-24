@@ -1,0 +1,40 @@
+name: Auto Build luci-app-netguard (Docker)
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    container: 
+      image: openwrtorg/sdk:23.05-x86-64  # 根据设备架构调整标签
+
+    steps:
+    # 修复1：合并重复的 Checkout 步骤，同时拉取主仓库和子模块
+    - name: Checkout code with submodules
+      uses: actions/checkout@v4
+      with:
+        repository: xxtt8812/luci-app-netguard  # 直接拉取目标仓库
+        submodules: recursive
+        path: package/luci-app-netguard  # 强制路径符合 OpenWrt 规范
+
+    # 修复2：添加 OpenWrt Feed 初始化（关键依赖！）
+    - name: Initialize OpenWrt feeds
+      run: |
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+
+    # 修复3：统一源码路径指向
+    - name: Compile plugin
+      run: |
+        cd package/luci-app-netguard
+        make -j$(nproc) V=s  # 多线程编译
+
+    # 修复4：修正产物路径匹配规则
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: netguard-ipk
+        path: bin/packages/*/base/luci-app-netguard*.ipk  # 适配标准 OpenWrt 输出目录
