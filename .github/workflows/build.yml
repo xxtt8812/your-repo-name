@@ -6,8 +6,8 @@ on:
   workflow_dispatch:
 
 env:
-  OPENWRT_VERSION: 22.03.5      # 推荐与目标路由器的 OpenWrt 版本一致
-  TARGET_PLATFORM: x86_64       # 根据实际架构修改（如 ramips/mt7621 等）
+  OPENWRT_VERSION: 22.03.5
+  TARGET_PLATFORM: x86_64
 
 jobs:
   build-plugin:
@@ -52,7 +52,9 @@ jobs:
           make package/luci-app-netguard/compile -j$(nproc) V=s
 
       - name: Upload IPK artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: netguard-ipk
-          path: openwrt/bin/packages/*/base/luci-app-netguard*.ipk
+          path: |
+            openwrt/bin/packages/*/base/luci-app-netguard*.ipk
+            openwrt/bin/targets/*/*/packages/luci-app-netguard*.ipk
