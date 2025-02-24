@@ -48,10 +48,13 @@ jobs:
           CONFIG_TARGET_x86_64=y
           CONFIG_PACKAGE_luci-app-webfilter=y
           CONFIG_PACKAGE_luci-compat=y
+          CONFIG_PACKAGE_iptables=y
+          CONFIG_PACKAGE_ipset=y
           CONFIG_PACKAGE_dnsmasq-full=y
-          CONFIG_PACKAGE_iptables-mod-filter=y
+          CONFIG_PACKAGE_kmod-ipt-ipset=y
+          CONFIG_PACKAGE_libipset=y
+          CONFIG_PACKAGE_libmnl=y
           CONFIG_PACKAGE_libustream-openssl=y
-          CONFIG_PACKAGE_luci-lib-jsonc=y
           EOF
           make defconfig
 
