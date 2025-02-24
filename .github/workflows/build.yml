@@ -1,87 +1,74 @@
-# File: .github/workflows/build-luci-app-netguard.yml
+# File: .github/workflows/build.yml
 name: Build luci-app-netguard (25.02)
 
 on:
   push:
-    branches: [ "master" ]
+    branches: [ "main" ]
   workflow_dispatch:
 
 env:
-  MIRROR_SOURCE: "https://mirrors.tuna.tsinghua.edu.cn"  # 中国境内加速源
-  SDK_VERSION: "25.02"                                   # 2025年最新SDK版本
+  MIRROR_SOURCE: "https://mirrors.tuna.tsinghua.edu.cn"  # 国内镜像加速
+  SDK_VERSION: "25.02"                                   # 适配 2025 年 SDK
 
 jobs:
   compile:
-    runs-on: ubuntu-20.04
-    timeout-minutes: 120
+    runs-on: ubuntu-24.04    # 2025 年 GitHub 默认运行环境
+    timeout-minutes: 90
 
     steps:
       # ====================
-      # 1. 系统级依赖安装
+      # 1. 系统依赖安装
       # ====================
-      - name: Setup Ubuntu Environment
+      - name: Install Dependencies
         run: |
-          # 替换apt源为清华镜像
-          sudo sed -i "s/archive.ubuntu.com/${{ env.MIRROR_SOURCE#*:// }}/g" /etc/apt/sources.list
+          sudo sed -i "s|archive.ubuntu.com|${MIRROR_SOURCE#*://}|g" /etc/apt/sources.list
           sudo apt-get update -o Acquire::Check-Valid-Until=false
-          
-          # 安装编译工具链（2025年新增libcrypto++-dev）
           sudo apt-get install -y \
             build-essential ccache git gawk libssl-dev libcrypto++-dev \
-            libncurses5-dev zlib1g-dev python3-venv python3-pip python3-dev \
-            libffi-dev file unzip jq
+            zlib1g-dev python3.12-venv python3-pip libffi-dev jq
 
       # ====================
-      # 2. OpenWrt SDK 配置
+      # 2. 下载 OpenWrt SDK
       # ====================
-      - name: Prepare OpenWrt SDK
+      - name: Download SDK
         run: |
-          SDK_FILENAME="openwrt-sdk-${{ env.SDK_VERSION }}-x86-64_gcc-14.1.0_musl.Linux-x86_64"
-          SDK_URL="${{ env.MIRROR_SOURCE }}/openwrt/releases/${{ env.SDK_VERSION }}/targets/x86/64/$SDK_FILENAME.tar.xz"
-          
-          # 带重试机制的下载（适配2025年网络环境）
-          for i in {1..5}; do
-            wget --no-check-certificate --tries=3 --timeout=120 "$SDK_URL" -O sdk.tar.xz && break
-            sleep $((i*10))
+          SDK_URL="$MIRROR_SOURCE/openwrt/releases/$SDK_VERSION/targets/x86/64/openwrt-sdk-$SDK_VERSION-x86-64_gcc-14.2.0_musl.Linux-x86_64.tar.xz"
+          for retry in {1..5}; do
+            wget --no-check-certificate --tries=3 --timeout=60 "$SDK_URL" -O sdk.tar.xz && break
+            sleep $((retry*10))
           done
-          
-          # 强制解压并验证完整性
           tar --warning=no-unknown-keyword -xvf sdk.tar.xz --strip-components=1 -C $GITHUB_WORKSPACE
-          [ -f "$GITHUB_WORKSPACE/staging_dir/host/bin/opkg" ] || { echo "SDK extraction failed!"; exit 1; }
+          [ -f "$GITHUB_WORKSPACE/staging_dir/host/bin/opkg" ] || { echo "❌ SDK 解压失败！"; exit 1; }
 
       # ====================
-      # 3. 源码仓库配置
+      # 3. 拉取插件源码
       # ====================
-      - name: Checkout Source Code
+      - name: Checkout Code
         uses: actions/checkout@v4
         with:
           repository: xxtt8812/luci-app-netguard
-          ssh-key: ${{ secrets.DEPLOY_KEY_2025 }}  # 2025年新密钥规范
-          submodules: recursive
+          ref: main                   # 指定分支/标签
           path: package/luci-app-netguard
-          sparse-checkout: |  # 优化克隆内容
-            /package/luci-app-netguard/Makefile
-            /package/luci-app-netguard/src
+          sparse-checkout: |          # 仅拉取必要文件
+            /src
+            /Makefile
+            /patches
 
       # ====================
-      # 4. 编译环境优化
+      # 4. 环境配置
       # ====================
-      - name: Configure Build Environment
+      - name: Setup Environment
         run: |
-          # Python虚拟环境（2025年需python3.12）
           python3.12 -m venv .venv
           source .venv/bin/activate
-          pip config set global.index-url ${{ env.MIRROR_SOURCE }}/pypi/simple
-          pip install --upgrade pip wheel
-          pip install cryptography==42.0.3  # 2025年兼容版本
+          pip config set global.index-url $MIRROR_SOURCE/pypi/simple
+          pip install cryptography==43.0.0  # 2025 年兼容版本
 
-          # 环境变量配置
           echo "STAGING_DIR=$GITHUB_WORKSPACE/staging_dir" >> $GITHUB_ENV
-          echo "PATH=$GITHUB_WORKSPACE/staging_dir/host/bin:$PATH" >> $GITHUB_ENV
-          echo "CCACHE_DIR=$GITHUB_WORKSPACE/.ccache" >> $GITHUB_ENV
+          echo "PATH=$STAGING_DIR/host/bin:$PATH" >> $GITHUB_ENV
 
       # ====================
-      # 5. 智能缓存系统
+      # 5. 缓存优化
       # ====================
       - name: Cache Dependencies
         uses: actions/cache@v3
@@ -91,23 +78,28 @@ jobs:
             openwrt/dl
             openwrt/build_dir
           key: ${{ runner.os }}-25.02-${{ hashFiles('package/luci-app-netguard/Makefile') }}
-          restore-keys: |
-            ${{ runner.os }}-25.02-
 
       # ====================
-      # 6. 编译执行阶段
+      # 6. 执行编译
       # ====================
       - name: Build Package
         run: |
           cd package/luci-app-netguard
-          
-          # 内存优化编译（2025年新增ZSTD压缩）
           make -j$(($(nproc)*2)) \
             CCACHE=1 \
             CCACHE_COMPRESS=1 \
-            CCACHE_COMPRESSLEVEL=3 \
-            CCACHE_COMPRESSOR=zstd \
-            V=sc
+            FORCE_UNSAFE_CONFIGURE=1 \
+            V=s
 
-          # 产物验证
-          [ -f "bin/packages/x86_64/luci/luci-app-netguard_git-25.02*.ipk" ] || exit 1
+          # 验证产物
+          [ -f "bin/packages/x86_64/luci/luci-app-netguard_25.02-*.ipk" ] || { echo "❌ 编译失败！"; exit 1; }
+
+      # ====================
+      # 7. 上传产物（可选）
+      # ====================
+      - name: Upload Artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: netguard-ipk
+          path: package/luci-app-netguard/bin/packages/*/luci-app-netguard_*.ipk
