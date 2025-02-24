@@ -1,4 +1,4 @@
-name: Auto Build luci-app-netguard (Docker)
+name: Auto Build luci-app-netguard (No Docker)
 
 on:
   push:
@@ -8,40 +8,51 @@ on:
 jobs:
   compile:
     runs-on: ubuntu-latest
-    container:
-      image: openwrtorg/sdk:23.05-x86-64  # 根据架构调整
-
+    
     steps:
-    # 核心步骤：拉取远程仓库及子模块
-    - name: Checkout remote repository
+    # 1. 安装基础编译工具链
+    - name: Setup OpenWrt Build Environment
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential ccache \
+        git gawk libssl-dev libncurses5-dev python3 python3-distutils
+        
+    # 2. 下载指定架构的OpenWrt SDK (示例为x86_64)
+    - name: Download OpenWrt SDK
+      run: |
+        SDK_URL="https://downloads.openwrt.org/releases/23.05/targets/x86/64/openwrt-sdk-23.05-x86-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
+        wget -q $SDK_URL -O sdk.tar.xz
+        tar -xf sdk.tar.xz --strip-components=1 -C $GITHUB_WORKSPACE
+        
+    # 3. 拉取远程仓库及子模块
+    - name: Checkout luci-app-netguard
       uses: actions/checkout@v4
       with:
-        repository: xxtt8812/luci-app-netguard  # 指定远程仓库
-        submodules: recursive  # 强制递归拉取子模块
-        path: package/luci-app-netguard  # 强制符合OpenWrt目录规范
-
-    # OpenWrt环境初始化
-    - name: Initialize feeds
+        repository: xxtt8812/luci-app-netguard
+        submodules: recursive
+        path: package/luci-app-netguard
+        
+    # 4. 配置环境变量
+    - name: Configure Env
+      run: |
+        echo "STAGING_DIR=$GITHUB_WORKSPACE/staging_dir" >> $GITHUB_ENV
+        echo "PATH=$GITHUB_WORKSPACE/staging_dir/host/bin:$PATH" >> $GITHUB_ENV
+        
+    # 5. 初始化OpenWrt依赖
+    - name: Initialize Feeds
       run: |
         ./scripts/feeds update -a
-        ./scripts/feeds install -a  # 解决luci.mk依赖
-
-    # 自定义补丁支持（可选）
-    - name: Apply patches
-      run: |
-        if [ -d "patches" ]; then
-          git -C package/luci-app-netguard apply $GITHUB_WORKSPACE/patches/*.patch
-        fi
-
-    # 多线程编译
-    - name: Compile package
+        ./scripts/feeds install -a
+        
+    # 6. 执行编译
+    - name: Build Package
       run: |
         cd package/luci-app-netguard
-        make -j$(nproc) V=s  # 显示详细日志
-
-    # 产物输出
-    - name: Upload artifact
+        make -j$(nproc) V=s
+        
+    # 7. 上传编译产物
+    - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
         name: netguard-ipk
-        path: bin/packages/*/base/luci-app-netguard*.ipk  # 标准输出路径
+        path: bin/packages/*/base/luci-app-netguard*.ipk
