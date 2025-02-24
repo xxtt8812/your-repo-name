@@ -47,7 +47,6 @@ jobs:
           CONFIG_TARGET_x86=y
           CONFIG_TARGET_x86_64=y
           CONFIG_PACKAGE_luci-app-control-webrestriction=y
-		  CONFIG_PACKAGE_dnsmasq_full_dnssec=y
           CONFIG_PACKAGE_luci-compat=y
           EOF
           make defconfig
