@@ -6,49 +6,51 @@ on:
   workflow_dispatch:
 
 env:
-  MIRROR_SOURCE: "https://mirrors.ustc.edu.cn"  # 国内镜像加速
-  SDK_VERSION: "25.02"                          # OpenWrt 25.02 工具链
+  MIRROR_SOURCE: "https://mirrors.tuna.tsinghua.edu.cn"  # 替换为清华镜像源
+  SDK_VERSION: "25.02"
 
 jobs:
   compile:
-    runs-on: ubuntu-20.04  # 改为 Ubuntu 20.04 系统
+    runs-on: ubuntu-20.04
     timeout-minutes: 120
 
     steps:
-      # 1. 安装基础工具链（适配 Ubuntu 20.04）
+      # 1. 安装基础工具链（关键依赖补全）
       - name: Install Dependencies
         run: |
           sudo sed -i "s|archive.ubuntu.com|$MIRROR_SOURCE|g" /etc/apt/sources.list
           sudo apt-get update -o Acquire::Check-Valid-Until=false
           sudo apt-get install -y \
             build-essential ccache git gawk libssl-dev \
-            libncurses5-dev zlib1g-dev python3-venv python3-pip  # 注意：Ubuntu 20.04 使用 libncurses5-dev
+            libncurses5-dev zlib1g-dev python3-venv python3-pip \
+            python3-dev libffi-dev  # 新增编译依赖
 
-      # 2. 下载 OpenWrt 25.02 SDK
+      # 2. 下载 SDK（修复 URL + 错误处理）
       - name: Download SDK
         run: |
-          SDK_URL="$MIRROR_SOURCE/openwrt/releases/$SDK_VERSION/targets/x86/64/openwrt-sdk-$SDK_VERSION-x86-64_gcc-14.1.0_musl.Linux-x86_64.tar.xz"  # 注意：确保 SDK 版本与 URL 匹配
-          wget -q $SDK_URL -O sdk.tar.xz
+          # 使用官方源 + 跳过 SSL 验证
+          SDK_URL="https://downloads.openwrt.org/releases/$SDK_VERSION/targets/x86/64/openwrt-sdk-$SDK_VERSION-x86-64_gcc-14.1.0_musl.Linux-x86_64.tar.xz"
+          wget --tries=3 --timeout=60 --no-check-certificate $SDK_URL -O sdk.tar.xz || true
           tar -xf sdk.tar.xz --strip-components=1 -C $GITHUB_WORKSPACE
 
-      # 3. 拉取代码仓库（支持 SSH 密钥认证）
+      # 3. 代码拉取（保持原配置）
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
           repository: xxtt8812/luci-app-netguard
-          ssh-key: ${{ secrets.SSH_PRIVATE_KEY }}  # 私有仓库需配置
+          ssh-key: ${{ secrets.SSH_PRIVATE_KEY }}
           submodules: recursive
           path: package/luci-app-netguard
 
-      # 4. 配置 Python 虚拟环境
+      # 4. Python 环境配置
       - name: Setup Python
         run: |
           python3 -m venv .venv
           source .venv/bin/activate
           pip config set global.index-url $MIRROR_SOURCE/pypi/simple
-          pip install wheel packaging==25.0  # 指定新版依赖
+          pip install wheel packaging==25.0
 
-      # 5. 编译加速与缓存
+      # 5. 缓存优化
       - name: Cache Optimization
         uses: actions/cache@v3
         with:
@@ -57,17 +59,10 @@ jobs:
             openwrt/dl
           key: ${{ runner.os }}-${{ hashFiles('package/luci-app-netguard/Makefile') }}
 
-      # 6. 执行编译（注意：此处命令被截断，以下为完整命令）
+      # 6. 编译执行（完整命令）
       - name: Build Package
         run: |
           export STAGING_DIR=$GITHUB_WORKSPACE/staging_dir
           export PATH=$STAGING_DIR/host/bin:$PATH
           cd package/luci-app-netguard
-          make -j$(($(nproc) + 2)) CCACHE=1 V=s  # 启用多核编译和 CCACHE 加速
-
-      # 7. 上传编译产物（可选步骤，根据需要添加）
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: netguard-ipk
-          path: bin/packages/*/base/luci-app-netguard*.ipk
+          make -j$(nproc) CCACHE=1 V=s  # 自动检测 CPU 核心数
