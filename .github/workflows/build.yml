@@ -1,58 +1,73 @@
-name: Auto Build luci-app-netguard (No Docker)
+name: Auto Build luci-app-netguard (2025.02)
 
 on:
   push:
     branches: [ "main" ]
   workflow_dispatch:
 
+env:
+  MIRROR_SOURCE: "https://mirrors.ustc.edu.cn"  # 国内镜像加速
+  SDK_VERSION: "25.02"                           # OpenWrt 25.02 工具链
+
 jobs:
   compile:
-    runs-on: ubuntu-latest
-    
+    runs-on: ubuntu-24.10  # 必须指定 2025 年兼容系统
+    timeout-minutes: 120
+
     steps:
-    # 1. 安装基础编译工具链
-    - name: Setup OpenWrt Build Environment
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y build-essential ccache \
-        git gawk libssl-dev libncurses5-dev python3 python3-distutils
-        
-    # 2. 下载指定架构的OpenWrt SDK (示例为x86_64)
-    - name: Download OpenWrt SDK
-      run: |
-        SDK_URL="https://downloads.openwrt.org/releases/23.05/targets/x86/64/openwrt-sdk-23.05-x86-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
-        wget -q $SDK_URL -O sdk.tar.xz
-        tar -xf sdk.tar.xz --strip-components=1 -C $GITHUB_WORKSPACE
-        
-    # 3. 拉取远程仓库及子模块
-    - name: Checkout luci-app-netguard
-      uses: actions/checkout@v4
-      with:
-        repository: xxtt8812/luci-app-netguard
-        submodules: recursive
-        path: package/luci-app-netguard
-        
-    # 4. 配置环境变量
-    - name: Configure Env
-      run: |
-        echo "STAGING_DIR=$GITHUB_WORKSPACE/staging_dir" >> $GITHUB_ENV
-        echo "PATH=$GITHUB_WORKSPACE/staging_dir/host/bin:$PATH" >> $GITHUB_ENV
-        
-    # 5. 初始化OpenWrt依赖
-    - name: Initialize Feeds
-      run: |
-        ./scripts/feeds update -a
-        ./scripts/feeds install -a
-        
-    # 6. 执行编译
-    - name: Build Package
-      run: |
-        cd package/luci-app-netguard
-        make -j$(nproc) V=s
-        
-    # 7. 上传编译产物
-    - name: Upload Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: netguard-ipk
-        path: bin/packages/*/base/luci-app-netguard*.ipk
+      # 1. 安装基础工具链（适配 Ubuntu 24.10）
+      - name: Install Dependencies
+        run: |
+          sudo sed -i "s|archive.ubuntu.com|$MIRROR_SOURCE|g" /etc/apt/sources.list
+          sudo apt-get update -o Acquire::Check-Valid-Until=false
+          sudo apt-get install -y \
+            build-essential ccache git gawk libssl-dev \
+            libncurses-dev zlib1g-dev python3-full python3-venv
+
+      # 2. 下载 OpenWrt 25.02 SDK
+      - name: Download SDK
+        run: |
+          SDK_URL="$MIRROR_SOURCE/openwrt/releases/$SDK_VERSION/targets/x86/64/openwrt-sdk-$SDK_VERSION-x86-64_gcc-14.1.0_musl.Linux-x86_64.tar.xz"
+          wget -q $SDK_URL -O sdk.tar.xz
+          tar -xf sdk.tar.xz --strip-components=1 -C $GITHUB_WORKSPACE
+
+      # 3. 拉取代码仓库（支持 SSH 密钥认证）
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          repository: xxtt8812/luci-app-netguard
+          ssh-key: ${{ secrets.SSH_PRIVATE_KEY }}  # 私有仓库需配置
+          submodules: recursive
+          path: package/luci-app-netguard
+
+      # 4. 配置 Python 虚拟环境
+      - name: Setup Python
+        run: |
+          python3 -m venv .venv
+          source .venv/bin/activate
+          pip config set global.index-url $MIRROR_SOURCE/pypi/simple
+          pip install wheel packaging==25.0  # 指定新版依赖
+
+      # 5. 编译加速与缓存
+      - name: Cache Optimization
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.ccache
+            openwrt/dl
+          key: ${{ runner.os }}-${{ hashFiles('package/luci-app-netguard/Makefile') }}
+
+      # 6. 执行编译
+      - name: Build Package
+        run: |
+          export STAGING_DIR=$GITHUB_WORKSPACE/staging_dir
+          export PATH=$STAGING_DIR/host/bin:$PATH
+          cd package/luci-app-netguard
+          make -j$(($(nproc) + 2)) CCACHE=1 V=s  # 启用 CCACHE
+
+      # 7. 产物上传与资源监控
+      - name: Post Process
+        uses: actions/upload-artifact@v4
+        with:
+          name: netguard-ipk
+          path: bin/packages/*/base/luci-app-netguard*.ipk
