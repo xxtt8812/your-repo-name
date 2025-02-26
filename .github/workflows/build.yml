@@ -1,4 +1,4 @@
-name: Build WebFilter Plugin (x86_64)
+name: Build Control WebRestriction Plugin (x86_64)
 
 on:
   push:
@@ -22,81 +22,41 @@ jobs:
           sudo apt-get install -y build-essential clang flex g++ gawk gcc-multilib \
             gettext git libncurses5-dev libssl-dev python3 python3-venv python3-dev \
             rsync unzip zlib1g-dev file wget libtool-bin automake autoconf libpam0g-dev \
-            liblzma-dev libsnmp-dev tree
+            liblzma-dev libsnmp-dev
 
       - name: Clone OpenWrt source
         run: |
           git clone https://git.openwrt.org/openwrt/openwrt.git --branch v${{ env.OPENWRT_VERSION }} --depth 1
           cd openwrt
-          echo "OpenWrt版本验证: $(cat include/version.mk | grep VERSION_NUMBER)"
 
-      - name: Update feeds
+      - name: Update feeds with luci-compat
         run: |
           cd openwrt
           ./scripts/feeds update -a
-          ./scripts/feeds install -a -p luci
           ./scripts/feeds install luci-compat libpam liblzma libnetsnmp
 
-      - name: Add WebFilter plugin
+      - name: Add plugin
         run: |
           cd openwrt
-          rm -rf package/luci-app-webfilter
-          
-          # 克隆并修复仓库结构
-          git clone --depth=1 https://github.com/xxtt8812/luci-app-webfilter.git package/luci-app-webfilter
-          
-          # 目录结构验证
-          echo "=== 插件目录结构 ==="
-          tree -L 3 package/luci-app-webfilter
-          
-          # 关键文件检查
-          [ -f "package/luci-app-webfilter/Makefile" ] || { echo "::error::Makefile缺失！"; exit 1; }
-          [ -d "package/luci-app-webfilter/root" ] || echo "::warning::root目录缺失，可能影响安装脚本"
-
-          # 23.05版本适配补丁
-          sed -i 's/iptables /iptables-legacy /g' package/luci-app-webfilter/root/etc/init.d/webfilter
-          sed -i 's/iptables-save /iptables-legacy-save /g' package/luci-app-webfilter/root/etc/init.d/webfilter
+          git clone https://github.com/xxtt8812/luci-app-blockclient.git  package/luci-app-blockclient
 
       - name: Configure target
         run: |
           cd openwrt
-          cat >> .config << 'EOF'
-          # 硬件架构
+          cat >> .config << EOF
           CONFIG_TARGET_x86=y
           CONFIG_TARGET_x86_64=y
-
-          # 主插件
-          CONFIG_PACKAGE_luci-app-webfilter=y
-
-          # Luci依赖
-          CONFIG_PACKAGE_luci-compat=y
-          CONFIG_PACKAGE_luci-lib-ipkg=y
-          CONFIG_PACKAGE_luci-i18n-webfilter-zh-cn=y
-
-          # 显式依赖
-          CONFIG_PACKAGE_iptables-legacy=y
-          CONFIG_PACKAGE_iptables-legacy-utils=y
-          CONFIG_PACKAGE_ipset=y
+          CONFIG_PACKAGE_luci-app-blockclient=y
+          CONFIG_PACKAGE_luci-i18n-blockclient-zh-cn=y
+          CONFIG_PACKAGE_iptables=y
           CONFIG_PACKAGE_dnsmasq-full=y
+          CONFIG_PACKAGE_ipset=y
+          CONFIG_PACKAGE_luci-compat=y
+          CONFIG_PACKAGE_kmod-ipt-core=y
           CONFIG_PACKAGE_kmod-ipt-ipset=y
-
-          # 隐式依赖
-          CONFIG_PACKAGE_libipset=y
-          CONFIG_PACKAGE_libmnl=y
-          CONFIG_PACKAGE_libubus=y
-          CONFIG_PACKAGE_libblobmsg-json=y
-          CONFIG_PACKAGE_libjson-c=y
-          CONFIG_PACKAGE_libuci=y
-          CONFIG_PACKAGE_libopenssl=y
-
-          # 禁用冲突包
-          CONFIG_PACKAGE_dnsmasq=n
+          CONFIG_PACKAGE_luci-base=y
           EOF
-
-          # 应用配置
           make defconfig
-          echo "=== 最终有效配置 ==="
-          ./scripts/diffconfig.sh
 
       - name: Build toolchain
         run: |
@@ -106,29 +66,10 @@ jobs:
       - name: Build plugin
         run: |
           cd openwrt
-          # 清理旧编译
-          make package/luci-app-webfilter/clean
-          
-          # 详细构建过程
-          echo "::group::编译详细日志"
-          make package/luci-app-webfilter/compile -j1 V=sc 2>&1 | tee build.log
-          echo "::endgroup::"
-          
-          # 自动错误分析
-          if grep -q "No rule to make target" build.log; then
-            echo "::error::包结构验证失败，请检查Makefile路径"
-            exit 1
-          fi
-          if grep -q "missing dependencies" build.log; then
-            echo "::warning::发现未声明的依赖项："
-            grep "missing dependencies" build.log | awk -F: '{print $2}' | sort | uniq
-            exit 1
-          fi
+          make package/luci-app-blockclient/compile -j$(nproc) V=s
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: webfilter-x86_64
-          path: |
-            openwrt/bin/packages/x86_64/base/luci-app-webfilter*.ipk
-            openwrt/build.log
+          name: blockclient-x86_64
+          path: openwrt/bin/packages/x86_64/base/luci-app-blockclient*.ipk
